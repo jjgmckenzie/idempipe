@@ -47,22 +47,22 @@ func NewTask(opts TaskOptions) (*Task, error) {
 	}
 
 	// Create a copy of the prerequisites slice to prevent external modification
-	depsCopy := make([]*Task, len(opts.Prerequisites))
+	prerequisitesCopy := make([]*Task, len(opts.Prerequisites))
 	if opts.Prerequisites != nil {
-		copy(depsCopy, opts.Prerequisites)
+		copy(prerequisitesCopy, opts.Prerequisites)
 	}
 
 	return &Task{
 		name:          opts.Name,
-		prerequisites: depsCopy, // Use the copy
+		prerequisites: prerequisitesCopy, // Use the copy
 		function:      opts.Function,
 		retryStrategy: opts.RetryStrategy,
 	}, nil
 }
 
 // String provides a simple string representation for the task, primarily for logging/debugging.
-func (s *Task) String() string {
-	return fmt.Sprintf("Task(%s)", s.name)
+func (task *Task) String() string {
+	return fmt.Sprintf("Task(%s)", task.name)
 }
 
 // Options configure a new Pipeline.
@@ -230,7 +230,7 @@ func (p *Pipeline) processPipelineResults(
 // handling context cancellation checks immediately after execution, and managing retries.
 func (p *Pipeline) runTaskWithRetry(
 	runCtx context.Context,
-	s *Task,
+	task *Task,
 	taskErrorsMu *sync.Mutex,
 	taskErrors map[*Task]error,
 ) {
@@ -238,42 +238,42 @@ func (p *Pipeline) runTaskWithRetry(
 	for {
 		select {
 		case <-runCtx.Done():
-			p.recordSkipError(s, runCtx.Err(), taskErrorsMu, taskErrors)
+			p.recordSkipError(task, runCtx.Err(), taskErrorsMu, taskErrors)
 			return
 		default:
 		}
 
-		taskExecError := p.runTaskFunction(runCtx, s)
+		taskExecError := p.runTaskFunction(runCtx, task)
 
 		if errors.Is(taskExecError, context.Canceled) {
-			p.recordSkipError(s, taskExecError, taskErrorsMu, taskErrors)
+			p.recordSkipError(task, taskExecError, taskErrorsMu, taskErrors)
 			return
 		}
 
 		if taskExecError == nil {
-			p.recordTaskResult(s, nil, taskErrorsMu, taskErrors)
+			p.recordTaskResult(task, nil, taskErrorsMu, taskErrors)
 			return
 		}
 
-		retryStrategy := s.retryStrategy
+		retryStrategy := task.retryStrategy
 		if retryStrategy == nil {
 			retryStrategy = p.retryStrategy
 		}
 
 		retryErr := retryStrategy(taskExecError, attempt)
 		if retryErr != nil {
-			p.recordTaskResult(s, retryErr, taskErrorsMu, taskErrors)
+			p.recordTaskResult(task, retryErr, taskErrorsMu, taskErrors)
 			return
 		}
 
 		if p.exceedsMaximumRetryDepth(attempt) {
-			maxRetryErr := fmt.Errorf("%s maximum retry depth reached (attempt %d), final error: %w", s, attempt, taskExecError)
-			p.recordTaskResult(s, maxRetryErr, taskErrorsMu, taskErrors)
+			maxRetryErr := fmt.Errorf("%s maximum retry depth reached (attempt %d), final error: %w", task, attempt, taskExecError)
+			p.recordTaskResult(task, maxRetryErr, taskErrorsMu, taskErrors)
 			return
 		}
 
 		attempt++
-		p.log("%s: Retrying (attempt %d) after error: %v", s, attempt, taskExecError)
+		p.log("%s: Retrying (attempt %d) after error: %v", task, attempt, taskExecError)
 	}
 }
 
@@ -281,23 +281,23 @@ func (p *Pipeline) runTaskWithRetry(
 // context checks before execution, concurrency limiting, and finally calls runTaskWithRetry.
 func (p *Pipeline) executeTask(
 	runCtx context.Context,
-	s *Task,
+	task *Task,
 	doneChans map[*Task]chan error,
 	taskErrorsMu *sync.Mutex,
 	taskErrors map[*Task]error,
 	wg *sync.WaitGroup,
 ) {
 	defer wg.Done()
-	defer close(doneChans[s])
+	defer close(doneChans[task])
 
-	depSkipError := p.waitForPrerequisites(runCtx, s, doneChans, taskErrorsMu, taskErrors)
-	if depSkipError != nil {
-		p.recordSkipError(s, depSkipError, taskErrorsMu, taskErrors)
+	prerequisiteSkipError := p.waitForPrerequisites(runCtx, task, doneChans, taskErrorsMu, taskErrors)
+	if prerequisiteSkipError != nil {
+		p.recordSkipError(task, prerequisiteSkipError, taskErrorsMu, taskErrors)
 		return
 	}
 
 	if err := checkContextCancellation(runCtx); err != nil {
-		p.recordSkipError(s, err, taskErrorsMu, taskErrors)
+		p.recordSkipError(task, err, taskErrorsMu, taskErrors)
 		return
 	}
 
@@ -306,45 +306,45 @@ func (p *Pipeline) executeTask(
 		case p.concurrencyLimiter <- struct{}{}:
 			defer func() { <-p.concurrencyLimiter }()
 		case <-runCtx.Done():
-			p.recordSkipError(s, runCtx.Err(), taskErrorsMu, taskErrors)
+			p.recordSkipError(task, runCtx.Err(), taskErrorsMu, taskErrors)
 			return
 		}
 	}
 
-	p.runTaskWithRetry(runCtx, s, taskErrorsMu, taskErrors)
+	p.runTaskWithRetry(runCtx, task, taskErrorsMu, taskErrors)
 }
 
 // waitForPrerequisites waits for all prerequisites of a task to complete.
 // It returns an error if any prerequisite fails or if the context is cancelled.
 func (p *Pipeline) waitForPrerequisites(
 	runCtx context.Context,
-	s *Task,
+	task *Task,
 	doneChans map[*Task]chan error,
 	taskErrorsMu *sync.Mutex,
 	taskErrors map[*Task]error,
 ) error {
-	var depSkipError error
+	var prerequisiteSkipError error
 	var cancelledWhileWaiting bool
 
-	for _, dep := range s.prerequisites {
-		p.log("Task %s: Waiting for prerequisite %s...", s.name, dep.name)
+	for _, prerequisite := range task.prerequisites {
+		p.log("%s: Waiting for prerequisite %s...", task, prerequisite)
 		select {
-		case <-doneChans[dep]:
+		case <-doneChans[prerequisite]:
 			taskErrorsMu.Lock()
-			depErr := taskErrors[dep]
+			prerequisiteErr := taskErrors[prerequisite]
 			taskErrorsMu.Unlock()
-			if depErr != nil {
-				if depSkipError == nil {
-					depSkipError = depErr
+			if prerequisiteErr != nil {
+				if prerequisiteSkipError == nil {
+					prerequisiteSkipError = prerequisiteErr
 				}
-				p.log("Task %s: Prerequisite %s did not complete successfully (%v).", s.name, dep.name, depErr)
+				p.log("%s: Prerequisite %s did not complete successfully (%v).", task, prerequisite, prerequisiteErr)
 			} else {
-				p.log("Task %s: Prerequisite %s completed successfully.", s.name, dep.name)
+				p.log("%s: Prerequisite %s completed successfully.", task, prerequisite)
 			}
 		case <-runCtx.Done():
-			p.log("Task %s: Cancelled by context while waiting for prerequisite %s.", s.name, dep.name)
-			if depSkipError == nil {
-				depSkipError = runCtx.Err()
+			p.log("%s: Cancelled by context while waiting for prerequisite %s.", task, prerequisite)
+			if prerequisiteSkipError == nil {
+				prerequisiteSkipError = runCtx.Err()
 			}
 			cancelledWhileWaiting = true
 		}
@@ -352,7 +352,7 @@ func (p *Pipeline) waitForPrerequisites(
 			break
 		}
 	}
-	return depSkipError
+	return prerequisiteSkipError
 }
 
 // defaultMaximumRetryDepth is the default maximum number of retries to allow for a given task, preventing infinite retries.
@@ -375,16 +375,16 @@ func (p *Pipeline) exceedsMaximumRetryDepth(attempt int) bool {
 
 // recordSkipError logs and records a skip error for a task.
 func (p *Pipeline) recordSkipError(
-	s *Task,
+	task *Task,
 	skipReason error,
 	taskErrorsMu *sync.Mutex,
 	taskErrors map[*Task]error,
 ) {
 	skipErr := fmt.Errorf("%w: %v", ErrTaskSkipped, skipReason)
-	p.log("Task %s: Skipping: %v", s.name, skipErr)
+	p.log("%s: Skipping: %v", task, skipErr)
 	taskErrorsMu.Lock()
-	if taskErrors[s] == nil {
-		taskErrors[s] = skipErr
+	if taskErrors[task] == nil {
+		taskErrors[task] = skipErr
 	}
 	taskErrorsMu.Unlock()
 }
@@ -401,32 +401,32 @@ func checkContextCancellation(runCtx context.Context) error {
 
 // runTaskFunction executes the task's function and handles panics.
 // It returns the error from the function or a panic error.
-func (p *Pipeline) runTaskFunction(runCtx context.Context, s *Task) (taskExecError error) {
-	p.log("Task %s: Starting...", s.name)
+func (p *Pipeline) runTaskFunction(runCtx context.Context, task *Task) (taskExecError error) {
+	p.log("%s: Starting...", task)
 	defer func() {
 		if r := recover(); r != nil {
-			taskExecError = fmt.Errorf("task %s panicked: %v", s.name, r)
-			p.log("Task %s: PANICKED: %v", s.name, r)
+			taskExecError = fmt.Errorf("%s panicked: %v", task, r)
+			p.log("%s: PANICKED: %v", task, r)
 		}
 	}()
-	taskExecError = s.function(runCtx)
+	taskExecError = task.function(runCtx)
 	return taskExecError
 }
 
 // recordTaskResult logs the task outcome and updates the shared error state.
 func (p *Pipeline) recordTaskResult(
-	s *Task,
+	task *Task,
 	taskExecError error,
 	taskErrorsMu *sync.Mutex,
 	taskErrors map[*Task]error,
 ) {
 	taskErrorsMu.Lock()
 	if taskExecError != nil {
-		p.log("Task %s: Failed: %v", s.name, taskExecError)
-		taskErrors[s] = taskExecError
+		p.log("%s: Failed: %v", task, taskExecError)
+		taskErrors[task] = taskExecError
 	} else {
-		p.log("Task %s: Completed", s.name)
-		taskErrors[s] = nil
+		p.log("%s: Completed", task)
+		taskErrors[task] = nil
 	}
 	taskErrorsMu.Unlock()
 }
@@ -470,21 +470,21 @@ func dfsVisit(task *Task, state map[*Task]visitState, path []*Task) error {
 	state[task] = visiting
 	path = append(path, task)
 
-	for _, dep := range task.prerequisites {
-		if dep == nil {
+	for _, prerequisite := range task.prerequisites {
+		if prerequisite == nil {
 			return fmt.Errorf("task %q has a nil prerequisite entry", task.name)
 		}
 
-		if _, ok := state[dep]; !ok {
-			return fmt.Errorf("prerequisite %q for task %q not found in the defined tasks", dep.name, task.name)
+		if _, ok := state[prerequisite]; !ok {
+			return fmt.Errorf("prerequisite %q for task %q not found in the defined tasks", prerequisite.name, task.name)
 		}
 
-		switch state[dep] {
+		switch state[prerequisite] {
 		case visiting:
-			cyclePathStr := buildCyclePathString(path, dep)
+			cyclePathStr := buildCyclePathString(path, prerequisite)
 			return fmt.Errorf("circular prerequisite detected: %s", cyclePathStr)
 		case unvisited:
-			if err := dfsVisit(dep, state, path); err != nil {
+			if err := dfsVisit(prerequisite, state, path); err != nil {
 				return err
 			}
 		case visited:

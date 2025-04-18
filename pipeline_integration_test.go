@@ -82,9 +82,9 @@ func TestPipeline_FileOperationsIntegration(t *testing.T) {
 	assert.NoError(t, pipelineErr, "Pipeline should run successfully")
 
 	logOutput := logger.String()
-	assert.Contains(t, logOutput, "Task WriteFile: Completed")
-	assert.Contains(t, logOutput, "Task ReadFile: Completed")
-	assert.Contains(t, logOutput, "Task DeleteFile: Completed")
+	assert.Contains(t, logOutput, "Task(WriteFile): Completed")
+	assert.Contains(t, logOutput, "Task(ReadFile): Completed")
+	assert.Contains(t, logOutput, "Task(DeleteFile): Completed")
 	assert.Contains(t, logOutput, "All tasks completed successfully")
 
 	readMu.Lock()
@@ -124,27 +124,27 @@ func TestPipeline_ComplexPrerequisiteIntegration(t *testing.T) {
 	fmt.Println(logOutput) // Print logs for debugging if needed
 
 	// Basic completion checks
-	assert.Contains(t, logOutput, "Task A: Completed")
-	assert.Contains(t, logOutput, "Task B: Completed")
-	assert.Contains(t, logOutput, "Task C: Completed")
-	assert.Contains(t, logOutput, "Task D: Completed")
+	assert.Contains(t, logOutput, "Task(A): Completed")
+	assert.Contains(t, logOutput, "Task(B): Completed")
+	assert.Contains(t, logOutput, "Task(C): Completed")
+	assert.Contains(t, logOutput, "Task(D): Completed")
 	assert.Contains(t, logOutput, "All tasks completed successfully")
 
 	// Check execution order based on logs
 	// Find indices of key log messages
-	aCompletedIdx := strings.Index(logOutput, "Task A: Completed")
-	bStartingIdx := strings.Index(logOutput, "Task B: Starting...")
-	cStartingIdx := strings.Index(logOutput, "Task C: Starting...")
-	bCompletedIdx := strings.Index(logOutput, "Task B: Completed")
-	cCompletedIdx := strings.Index(logOutput, "Task C: Completed")
-	dStartingIdx := strings.Index(logOutput, "Task D: Starting...")
+	aCompletedIdx := strings.Index(logOutput, "Task(A): Completed")
+	bStartingIdx := strings.Index(logOutput, "Task(B): Starting...")
+	cStartingIdx := strings.Index(logOutput, "Task(C): Starting...")
+	bCompletedIdx := strings.Index(logOutput, "Task(B): Completed")
+	cCompletedIdx := strings.Index(logOutput, "Task(C): Completed")
+	dStartingIdx := strings.Index(logOutput, "Task(D): Starting...")
 
-	assert.NotEqual(t, -1, aCompletedIdx, "Log should contain 'Task A: Completed'")
-	assert.NotEqual(t, -1, bStartingIdx, "Log should contain 'Task B: Starting...'")
-	assert.NotEqual(t, -1, cStartingIdx, "Log should contain 'Task C: Starting...'")
-	assert.NotEqual(t, -1, bCompletedIdx, "Log should contain 'Task B: Completed'")
-	assert.NotEqual(t, -1, cCompletedIdx, "Log should contain 'Task C: Completed'")
-	assert.NotEqual(t, -1, dStartingIdx, "Log should contain 'Task D: Starting...'")
+	assert.NotEqual(t, -1, aCompletedIdx, "Log should contain 'Task(A): Completed'")
+	assert.NotEqual(t, -1, bStartingIdx, "Log should contain 'Task(B): Starting...'")
+	assert.NotEqual(t, -1, cStartingIdx, "Log should contain 'Task(C): Starting...'")
+	assert.NotEqual(t, -1, bCompletedIdx, "Log should contain 'Task(B): Completed'")
+	assert.NotEqual(t, -1, cCompletedIdx, "Log should contain 'Task(C): Completed'")
+	assert.NotEqual(t, -1, dStartingIdx, "Log should contain 'Task(D): Starting...'")
 
 	// Verify B and C start after A completes
 	assert.Greater(t, bStartingIdx, aCompletedIdx, "B should start after A completes")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -109,10 +110,10 @@ func TestPipeline_Success(t *testing.T) {
 	assert.NoError(t, err, "Pipeline should run successfully")
 
 	logOutput := logger.String()
-	assert.Contains(t, logOutput, "Task A: Completed")
-	assert.Contains(t, logOutput, "Task B: Completed")
-	assert.Contains(t, logOutput, "Task C: Completed")
-	assert.Contains(t, logOutput, "Task D: Completed")
+	assert.Contains(t, logOutput, "Task(A): Completed")
+	assert.Contains(t, logOutput, "Task(B): Completed")
+	assert.Contains(t, logOutput, "Task(C): Completed")
+	assert.Contains(t, logOutput, "Task(D): Completed")
 	assert.Contains(t, logOutput, "All tasks completed successfully")
 }
 
@@ -138,13 +139,13 @@ func TestPipeline_Failure(t *testing.T) {
 	assert.Contains(t, err.Error(), `map[Task(B):intentional failure]`, "Error message should contain the specific task error map")
 
 	logOutput := logger.String()
-	assert.Contains(t, logOutput, "Task A: Completed")
-	assert.Contains(t, logOutput, "Task B: Failed: intentional failure")
-	assert.Contains(t, logOutput, "Task C: Completed")
-	assert.Contains(t, logOutput, "Task D: Prerequisite B did not complete successfully (intentional failure).")
+	assert.Contains(t, logOutput, "Task(A): Completed")
+	assert.Contains(t, logOutput, "Task(B): Failed: intentional failure")
+	assert.Contains(t, logOutput, "Task(C): Completed")
+	assert.Contains(t, logOutput, "Task(D): Prerequisite Task(B) did not complete successfully (intentional failure).")
 	assert.Contains(t, logOutput, "Completed with 1 error(s):")
-	assert.NotContains(t, logOutput, "Task D: Starting...")
-	assert.NotContains(t, logOutput, "Task D: Completed")
+	assert.NotContains(t, logOutput, "Task(D): Starting...")
+	assert.NotContains(t, logOutput, "Task(D): Completed")
 	assert.NotContains(t, logOutput, "All tasks completed successfully.")
 }
 
@@ -285,12 +286,12 @@ func verifyCancellationResults(t *testing.T, pipelineErr error, logger *testLogg
 	assert.True(t, errors.Is(pipelineErr, context.Canceled) || errors.Is(pipelineErr, context.DeadlineExceeded), "Error should be context.Canceled or DeadlineExceeded")
 
 	logOutput := logger.String()
-	assert.Contains(t, logOutput, "Task Blocker: Skipping: task skipped due to prerequisite failure or cancellation: context canceled")
-	assert.Contains(t, logOutput, "Task B: Skipping:")
+	assert.Contains(t, logOutput, "Task(Blocker): Skipping: task skipped due to prerequisite failure or cancellation: context canceled")
+	assert.Contains(t, logOutput, "Task(B): Skipping:")
 	assert.Contains(t, logOutput, "External context cancelled. Waiting for tasks to finish...")
 	assert.Contains(t, logOutput, "Tasks finished after cancellation signal.")
-	assert.NotContains(t, logOutput, "Task B: Starting...")
-	assert.NotContains(t, logOutput, "Task B: Completed")
+	assert.NotContains(t, logOutput, "Task(B): Starting...")
+	assert.NotContains(t, logOutput, "Task(B): Completed")
 	assert.NotContains(t, logOutput, "All tasks completed successfully.")
 }
 
@@ -315,10 +316,10 @@ func TestPipeline_PrerequisiteFailed(t *testing.T) {
 	assert.Contains(t, err.Error(), `map[Task(A):root cause failure]`, "Error message should contain the specific task error")
 
 	logOutput := logger.String()
-	assert.Contains(t, logOutput, "Task A: Failed: root cause failure")
-	assert.Contains(t, logOutput, "Task B: Skipping: task skipped due to prerequisite failure or cancellation: root cause failure")
-	assert.NotContains(t, logOutput, "Task B: Starting...")
-	assert.NotContains(t, logOutput, "Task B: Completed")
+	assert.Contains(t, logOutput, "Task(A): Failed: root cause failure")
+	assert.Contains(t, logOutput, "Task(B): Skipping: task skipped due to prerequisite failure or cancellation: root cause failure")
+	assert.NotContains(t, logOutput, "Task(B): Starting...")
+	assert.NotContains(t, logOutput, "Task(B): Completed")
 }
 
 func TestPipeline_MissingPrerequisiteDefinition(t *testing.T) {
@@ -414,10 +415,10 @@ func TestPipeline_ContextCancellationBeforeTaskStart(t *testing.T) {
 	logOutput := logger.String()
 	fmt.Println(logOutput)
 
-	assert.Contains(t, logOutput, "Task A: Skipping:", "Log should show cancellation before execution")
+	assert.Contains(t, logOutput, "Task(A): Skipping:", "Log should show cancellation before execution")
 	assert.Contains(t, logOutput, "External context cancelled. Waiting for tasks to finish...", "Log should show external context was cancelled")
-	assert.NotContains(t, logOutput, "Task A: Starting...")
-	assert.NotContains(t, logOutput, "Task A: Completed")
+	assert.NotContains(t, logOutput, "Task(A): Starting...")
+	assert.NotContains(t, logOutput, "Task(A): Completed")
 	assert.NotContains(t, logOutput, "All tasks completed successfully")
 }
 
@@ -440,15 +441,15 @@ func TestPipeline_PanicRecovery(t *testing.T) {
 
 	require.Error(t, err, "Pipeline should return an error due to panic")
 	assert.Contains(t, err.Error(), "pipeline \"PanicTest\" failed with 1 error(s)")
-	assert.Contains(t, err.Error(), "map[Task(B):task B panicked: intentional panic]")
+	assert.Contains(t, err.Error(), "map[Task(B):Task(B) panicked: intentional panic]")
 
 	logOutput := logger.String()
-	assert.Contains(t, logOutput, "Task A: Completed")
-	assert.Contains(t, logOutput, "Task B: PANICKED: intentional panic")
-	assert.Contains(t, logOutput, "Task C: Completed") // C should still complete as it only depends on A
-	assert.Contains(t, logOutput, "Task D: Prerequisite B did not complete successfully (task B panicked: intentional panic).")
+	assert.Contains(t, logOutput, "Task(A): Completed")
+	assert.Contains(t, logOutput, "Task(B): PANICKED: intentional panic")
+	assert.Contains(t, logOutput, "Task(C): Completed") // C should still complete as it only depends on A
+	assert.Contains(t, logOutput, "Task(D): Prerequisite Task(B) did not complete successfully (Task(B) panicked: intentional panic).")
 	assert.Contains(t, logOutput, "Completed with 1 error(s):")
-	assert.NotContains(t, logOutput, "Task D: Starting...")
+	assert.NotContains(t, logOutput, "Task(D): Starting...")
 	assert.NotContains(t, logOutput, "All tasks completed successfully.")
 }
 
@@ -498,12 +499,12 @@ func TestPipeline_IndependentBranchFailure(t *testing.T) {
 	fmt.Println(logOutput)
 
 	// Verify Branch 1 (Failure)
-	assert.Contains(t, logOutput, "Task A: Completed")
-	assert.Contains(t, logOutput, "Task B: Completed")
-	assert.Contains(t, logOutput, "Task C: Failed: C failed")
-	assert.Contains(t, logOutput, "Task D: Completed")
-	assert.Contains(t, logOutput, "Task E: Skipping: task skipped due to prerequisite failure or cancellation: C failed")
-	assert.Contains(t, logOutput, "Task F: Skipping: task skipped due to prerequisite failure or cancellation: task skipped due to prerequisite failure or cancellation: C failed")
+	assert.Contains(t, logOutput, "Task(A): Completed")
+	assert.Contains(t, logOutput, "Task(B): Completed")
+	assert.Contains(t, logOutput, "Task(C): Failed: C failed")
+	assert.Contains(t, logOutput, "Task(D): Completed")
+	assert.Contains(t, logOutput, "Task(E): Skipping: task skipped due to prerequisite failure or cancellation: C failed")
+	assert.Contains(t, logOutput, "Task(F): Skipping: task skipped due to prerequisite failure or cancellation: task skipped due to prerequisite failure or cancellation: C failed")
 
 	// Verify overall status
 	assert.Contains(t, logOutput, "Completed with 1 error(s):")
@@ -583,21 +584,21 @@ func TestPipeline_MultipleIndependentFailures(t *testing.T) {
 	fmt.Println(logOutput) // Print logs for debugging
 
 	// Verify failures
-	assert.Contains(t, logOutput, "Task A: Failed: Fail A")
-	assert.Contains(t, logOutput, "Task C: Failed: Fail C")
+	assert.Contains(t, logOutput, "Task(A): Failed: Fail A")
+	assert.Contains(t, logOutput, "Task(C): Failed: Fail C")
 
 	// Verify skips due to failures
-	assert.Contains(t, logOutput, "Task B: Prerequisite A did not complete successfully")
-	assert.Contains(t, logOutput, "Task D: Prerequisite C did not complete successfully")
-	assert.Contains(t, logOutput, "Task F: Prerequisite E completed successfully")
+	assert.Contains(t, logOutput, "Task(B): Prerequisite Task(A) did not complete successfully")
+	assert.Contains(t, logOutput, "Task(D): Prerequisite Task(C) did not complete successfully")
+	assert.Contains(t, logOutput, "Task(F): Prerequisite Task(E) completed successfully")
 
 	// Verify successes
-	assert.Contains(t, logOutput, "Task E: Completed")
-	assert.Contains(t, logOutput, "Task F: Completed")
+	assert.Contains(t, logOutput, "Task(E): Completed")
+	assert.Contains(t, logOutput, "Task(F): Completed")
 
 	// Verify tasks that should not have started
-	assert.NotContains(t, logOutput, "Task B: Starting...")
-	assert.NotContains(t, logOutput, "Task D: Starting...")
+	assert.NotContains(t, logOutput, "Task(B): Starting...")
+	assert.NotContains(t, logOutput, "Task(D): Starting...")
 
 	// Verify overall status
 	assert.Contains(t, logOutput, "Completed with 2 error(s):")
@@ -788,8 +789,8 @@ func TestPipeline_ComplexCancellation(t *testing.T) {
 	assert.NotContains(t, logOutput, "All tasks completed successfully", "Pipeline should not log successful completion after cancellation")
 
 	// Verify Blocker and A completed (they finished before cancel)
-	assert.Contains(t, logOutput, "Task Blocker: Completed", "Blocker should complete before cancellation")
-	assert.Contains(t, logOutput, "Task A: Completed", "A should complete before cancellation")
+	assert.Contains(t, logOutput, "Task(Blocker): Completed", "Blocker should complete before cancellation")
+	assert.Contains(t, logOutput, "Task(A): Completed", "A should complete before cancellation")
 
 	// Verify B, C, D were skipped or cancelled
 	// They might log "Completed" if they finish *very* quickly after A but before the cancel signal
@@ -808,7 +809,7 @@ func TestPipeline_ConcurrencyLimit(t *testing.T) {
 
 	tasks := make([]*Task, numTasks)
 	for i := 0; i < numTasks; i++ {
-		taskName := fmt.Sprintf("Task-%d", i)
+		taskName := strconv.Itoa(i)
 		tasks[i], _ = NewTask(TaskOptions{
 			Name:          taskName,
 			Prerequisites: nil,
@@ -866,7 +867,7 @@ func TestPipeline_ConcurrencyLimit(t *testing.T) {
 	logOutput := logger.String()
 	assert.Contains(t, logOutput, "All tasks completed successfully")
 	for i := 0; i < numTasks; i++ {
-		assert.Contains(t, logOutput, fmt.Sprintf("Task-%d: Completed", i))
+		assert.Contains(t, logOutput, fmt.Sprintf("Task(%d): Completed", i))
 	}
 	fmt.Printf("Max concurrency observed: %d\n", maxObserved) // Print for info
 }
@@ -1292,6 +1293,7 @@ func TestRetryStrategyPermitsInfiniteLoopOnNegativeMaximumDepth(t *testing.T) {
 	})
 	err := p.Run(ctx)
 	assert.Greater(t, attempts, 1000)
+	assert.Error(t, err)
 	assert.NotContains(t, err.Error(), "maximum retry depth reached", "Error should not indicate maximum retry depth reached")
 	assert.Contains(t, err.Error(), "context deadline exceeded", "Error should indicate that the loop was ended prematurely and would've continued")
 }
@@ -1346,12 +1348,12 @@ func TestPipeline_ConcurrencyLimitCancelWait(t *testing.T) {
 	assert.Contains(t, logOutput, "[Pipeline ConcurrencyLimitCancelWait] External context cancelled.")
 
 	// Check which task started and which was skipped
-	taskAStarted := strings.Contains(logOutput, "Task A: Starting...")
-	taskBStarted := strings.Contains(logOutput, "Task B: Starting...")
+	taskAStarted := strings.Contains(logOutput, "Task(A): Starting...")
+	taskBStarted := strings.Contains(logOutput, "Task(B): Starting...")
 
 	// Define the specific skip log pattern we expect for the waiting/cancelled task
-	taskASkippedLog := "Task A: Skipping: task skipped due to prerequisite failure or cancellation: context canceled"
-	taskBSkippedLog := "Task B: Skipping: task skipped due to prerequisite failure or cancellation: task skipped due to prerequisite failure or cancellation: context canceled"
+	taskASkippedLog := "Task(A): Skipping: task skipped due to prerequisite failure or cancellation: context canceled"
+	taskBSkippedLog := "Task(B): Skipping: task skipped due to prerequisite failure or cancellation: context canceled"
 
 	taskASkipped := strings.Contains(logOutput, taskASkippedLog)
 	taskBSkipped := strings.Contains(logOutput, taskBSkippedLog)
@@ -1367,9 +1369,9 @@ func TestPipeline_ConcurrencyLimitCancelWait(t *testing.T) {
 
 	// Optional: Ensure the task that was supposed to be skipped *waiting* didn't somehow complete
 	if !taskAStarted && taskASkipped { // A was the one skipped while waiting
-		assert.NotContains(t, logOutput, "Task A: Completed", "Task A should not complete if it was skipped waiting")
+		assert.NotContains(t, logOutput, "Task(A): Completed", "Task A should not complete if it was skipped waiting")
 	}
 	if !taskBStarted && taskBSkipped { // B was the one skipped while waiting
-		assert.NotContains(t, logOutput, "Task B: Completed", "Task B should not complete if it was skipped waiting")
+		assert.NotContains(t, logOutput, "Task(B): Completed", "Task B should not complete if it was skipped waiting")
 	}
 }
