@@ -1375,3 +1375,131 @@ func TestPipeline_ConcurrencyLimitCancelWait(t *testing.T) {
 		assert.NotContains(t, logOutput, "Task(B): Completed", "Task B should not complete if it was skipped waiting")
 	}
 }
+
+// TestPipeline_CancelWhileWaitingForPrerequisite tests that cancellation is handled
+// correctly when a task is actively waiting for a prerequisite.
+func TestPipeline_CancelWhileWaitingForPrerequisite(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // Ensure cancellation happens eventually if test fails
+
+	blockerStarted := make(chan struct{})
+	blockerCanFinish := make(chan struct{}) // Never closed in this test
+	waiterFuncStarted := make(chan struct{})
+
+	// Task A: Blocks until signalled (which won't happen)
+	taskBlocker, err := NewTask(TaskOptions{
+		Name: "Blocker",
+		Function: func(taskCtx context.Context) error {
+			close(blockerStarted)
+			t.Log("Blocker task started, waiting for signal or cancellation...")
+			select {
+			case <-blockerCanFinish:
+				t.Log("Blocker unexpectedly allowed to finish")
+				return nil
+			case <-taskCtx.Done():
+				t.Logf("Blocker received cancellation: %v", taskCtx.Err())
+				return taskCtx.Err() // Correctly return context error
+			}
+		},
+	})
+	require.NoError(t, err)
+
+	// Task B: Waits for Task A
+	taskWaiter, err := NewTask(TaskOptions{
+		Name:          "Waiter",
+		Prerequisites: []*Task{taskBlocker},
+		Function: func(taskCtx context.Context) error {
+			// This part should ideally not be reached if cancellation during wait works
+			t.Log("Waiter task function unexpectedly started execution")
+			close(waiterFuncStarted) // Signal that the Waiter task *logic* has started
+			return errors.New("waiter function started unexpectedly")
+		},
+	})
+	require.NoError(t, err)
+
+	logger := &testLogger{}
+	pipeline, err := NewPipeline(Options{
+		Name:   "CancelWhileWaitingTest",
+		Tasks:  []*Task{taskBlocker, taskWaiter},
+		Logger: logger.Log,
+		// Use ConcurrencyLimit 2+ to ensure both can start scheduling phase promptly
+		ConcurrencyLimit: 2,
+	})
+	require.NoError(t, err)
+
+	var pipelineErr error
+	pipelineDone := make(chan struct{})
+	go func() {
+		defer close(pipelineDone)
+		t.Log("Starting pipeline run...")
+		pipelineErr = pipeline.Run(ctx)
+		t.Logf("Pipeline run finished with err: %v", pipelineErr)
+	}()
+
+	// Wait until the log confirms Waiter is waiting for Blocker.
+	// This is the most reliable way to know it's in the target state without modifying pipeline internals.
+	expectedLog := "Task(Waiter): Waiting for prerequisite Task(Blocker)..."
+	logWaitTimeout := 3 * time.Second // Increased timeout slightly
+	logCheckInterval := 10 * time.Millisecond
+	startTime := time.Now()
+	foundLog := false
+	t.Logf("Waiting for log message: '%s'", expectedLog)
+	for time.Since(startTime) < logWaitTimeout {
+		if logger.Contains(expectedLog) {
+			t.Logf("Found expected log message after %v.", time.Since(startTime))
+			foundLog = true
+			break
+		}
+		time.Sleep(logCheckInterval)
+	}
+	// Add a small delay AFTER finding the log to increase chance the select is entered
+	// This is still a bit racy but better than nothing. Ideally, we'd have an internal hook.
+	if foundLog {
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	require.True(t, foundLog, "Did not find log message '%s' within %v. Logs:\n%s", expectedLog, logWaitTimeout, logger.String())
+
+	// Now that we know Waiter is waiting, cancel the context
+	t.Logf("Cancelling context...")
+	cancel()
+
+	// Wait for the pipeline to finish
+	select {
+	case <-pipelineDone:
+		t.Log("Pipeline finished.")
+	case <-time.After(2 * time.Second):
+		// If this timeout hits, it might indicate a deadlock or that cancellation wasn't handled properly.
+		t.Fatalf("Pipeline did not finish within 2s after cancellation. Logs:\n%s", logger.String())
+	}
+
+	// Assertions
+	require.Error(t, pipelineErr, "Pipeline should return an error")
+	assert.ErrorIs(t, pipelineErr, context.Canceled, "Pipeline error should be context.Canceled")
+
+	logOutput := logger.String()
+	t.Logf("--- Final Logs ---:\n%s\n------------------", logOutput)
+
+	// Verify the specific cancellation message *during* the wait
+	assert.Contains(t, logOutput, "Task(Waiter): Cancelled by context while waiting for prerequisite Task(Blocker).", "Waiter should log cancellation during prerequisite wait")
+
+	// Verify Waiter did not start its main function (it shouldn't have been closed)
+	select {
+	case <-waiterFuncStarted:
+		t.Error("Waiter task function should not have started execution")
+	default:
+		// Expected: waiterFuncStarted channel remains open and unreadable
+	}
+
+	// Verify Blocker was also likely cancelled or skipped
+	// Blocker might be skipped *before* starting if cancellation is fast, or fail *during* execution.
+	blockerOutcomeLogged := strings.Contains(logOutput, "Task(Blocker): Skipping:") ||
+		strings.Contains(logOutput, "Task(Blocker): Failed: context canceled") ||
+		strings.Contains(logOutput, "Blocker received cancellation") // Log from task func
+	assert.True(t, blockerOutcomeLogged, "Blocker task should show some form of cancellation in logs")
+
+	assert.Contains(t, logOutput, "External context cancelled.")
+	assert.NotContains(t, logOutput, "All tasks completed successfully")
+}
