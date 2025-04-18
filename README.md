@@ -1,5 +1,5 @@
 # Idempipe
-[![Go Reference](https://pkg.go.dev/badge/github.com/jjgmckenzie/idempipe.svg)](https://pkg.go.dev/github.com/jjgmckenzie/idempipe) [![Go Coverage](https://github.com/jjgmckenzie/idempipe/wiki/coverage.svg)](https://raw.githack.com/wiki/jjgmckenzie/idempipe/coverage.html) [![Go Report Card](https://goreportcard.com/badge/github.com/jjgmckenzie/idempipe)](https://goreportcard.com/report/github.com/jjgmckenzie/idempipe)
+[![Go Reference](https://pkg.go.dev/badge/github.com/jjgmckenzie/idempipe.svg)](https://pkg.go.dev/github.com/jjgmckenzie/idempipe) [![Go Report Card](https://goreportcard.com/badge/github.com/jjgmckenzie/idempipe)](https://goreportcard.com/report/github.com/jjgmckenzie/idempipe) [![Go Coverage](https://github.com/jjgmckenzie/idempipe/wiki/coverage.svg)](https://raw.githack.com/wiki/jjgmckenzie/idempipe/coverage.html)
 
 Simple, concurrent, idempotent DAG pipelines in Go
 
