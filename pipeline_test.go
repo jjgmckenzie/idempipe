@@ -1503,3 +1503,77 @@ func TestPipeline_CancelWhileWaitingForPrerequisite(t *testing.T) {
 	assert.Contains(t, logOutput, "External context cancelled.")
 	assert.NotContains(t, logOutput, "All tasks completed successfully")
 }
+
+// TestPipeline_SkipCondition tests that a task with a true SkipCondition is skipped
+// and its dependent tasks still run.
+func TestPipeline_SkipCondition(t *testing.T) {
+	shouldSkip := true
+	shouldSkipFunc := func() bool {
+		return shouldSkip
+	}
+
+	taskA, errA := NewTask(TaskOptions{
+		Name:          "Skippable",
+		Prerequisites: nil,
+		Function: func(ctx context.Context) error {
+			// This function should not be called
+			assert.Fail(t, "Skippable task function should not be executed")
+			return errors.New("should have been skipped")
+		},
+		ShouldSkip: shouldSkipFunc,
+	})
+	require.NoError(t, errA)
+
+	taskB := successfulTask(t, "Dependent", 10*time.Millisecond, taskA)
+
+	logger := &testLogger{}
+	pipeline, err := NewPipeline(Options{
+		Name:   "SkipTest",
+		Tasks:  []*Task{taskA, taskB},
+		Logger: logger.Log,
+	})
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	err = pipeline.Run(ctx)
+
+	assert.NoError(t, err, "Pipeline should run successfully even with a skipped task")
+
+	logOutput := logger.String()
+	t.Logf("Logs:\n%s", logOutput) // Log output for debugging
+	assert.Contains(t, logOutput, "Task(Skippable): Skipping due to skip condition.", "Skippable task should log skipping")
+	assert.NotContains(t, logOutput, "Task(Skippable): Starting...", "Skippable task should not start execution")
+	assert.NotContains(t, logOutput, "Task(Skippable): Completed", "Skippable task should not log completion")
+	assert.Contains(t, logOutput, "Task(Dependent): Waiting for prerequisite Task(Skippable)...", "Dependent task should wait for Skippable")
+	assert.Contains(t, logOutput, "Task(Dependent): Prerequisite Task(Skippable) completed successfully.", "Dependent task should see Skippable as successful")
+	assert.Contains(t, logOutput, "Task(Dependent): Completed", "Dependent task should complete")
+	assert.Contains(t, logOutput, "All tasks completed successfully")
+
+	// Test again, but this time the condition is false
+	shouldSkip = false
+	taskAExecuted := atomic.Bool{}
+	taskA.function = func(ctx context.Context) error {
+		taskAExecuted.Store(true)
+		return nil // Now it should execute and succeed
+	}
+
+	logger = &testLogger{} // Reset logger
+	pipeline, err = NewPipeline(Options{
+		Name:   "SkipTest-NotSkipped",
+		Tasks:  []*Task{taskA, taskB},
+		Logger: logger.Log,
+	})
+	require.NoError(t, err)
+
+	err = pipeline.Run(ctx)
+	assert.NoError(t, err, "Pipeline should run successfully when skip condition is false")
+	assert.True(t, taskAExecuted.Load(), "Task A function should have been executed when skip condition is false")
+
+	logOutput = logger.String()
+	t.Logf("Logs (Not Skipped):\n%s", logOutput)
+	assert.NotContains(t, logOutput, "Task(Skippable): Skipping due to skip condition.")
+	assert.Contains(t, logOutput, "Task(Skippable): Starting...")
+	assert.Contains(t, logOutput, "Task(Skippable): Completed")
+	assert.Contains(t, logOutput, "Task(Dependent): Completed")
+	assert.Contains(t, logOutput, "All tasks completed successfully")
+}

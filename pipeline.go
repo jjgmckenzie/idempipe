@@ -20,20 +20,24 @@ type Task struct {
 	prerequisites []*Task // Internal slice, copied during construction
 	function      func(ctx context.Context) error
 	retryStrategy func(err error, attempt int) error
+	shouldSkip    func() bool // Optional: Function to determine if the task should be skipped
 }
 
 // TaskOptions are the options for a task.
-// It is used to create a task with a custom name, prerequisites, function, and retry strategy (optional).
+// It is used to create a task with a custom name, prerequisites, function, retry strategy (optional),
+// and skip condition (optional).
 // The retry strategy is an optional function that takes an error and an attempt number, and returns an error.
 // An error returned by the retry strategy indicates that the task should not be retried.
 // E.g. if the task is a network call, the retry strategy might be to sleep and retry up to 3 times.
 // Context cancellation is handled automatically by the pipeline, so the retry strategy does not need to handle it.
-
+// The skip condition is an optional function that returns true if the task should be skipped.
+// If skipped, the task is considered successfully completed (error is nil) for dependency purposes.
 type TaskOptions struct {
 	Name          string
 	Prerequisites []*Task
 	Function      func(ctx context.Context) error
 	RetryStrategy func(err error, attempt int) error
+	ShouldSkip    func() bool // Optional: If this returns true, the task is skipped.
 }
 
 // NewTask creates and validates a new Task.
@@ -57,6 +61,7 @@ func NewTask(opts TaskOptions) (*Task, error) {
 		prerequisites: prerequisitesCopy, // Use the copy
 		function:      opts.Function,
 		retryStrategy: opts.RetryStrategy,
+		shouldSkip:    opts.ShouldSkip, // Assign the skip condition
 	}, nil
 }
 
@@ -289,6 +294,15 @@ func (p *Pipeline) executeTask(
 ) {
 	defer wg.Done()
 	defer close(doneChans[task])
+
+	// Check skip condition first
+	if task.shouldSkip != nil && task.shouldSkip() {
+		p.log("%s: Skipping due to skip condition.", task)
+		taskErrorsMu.Lock()
+		taskErrors[task] = nil
+		taskErrorsMu.Unlock()
+		return
+	}
 
 	prerequisiteSkipError := p.waitForPrerequisites(runCtx, task, doneChans, taskErrorsMu, taskErrors)
 	if prerequisiteSkipError != nil {

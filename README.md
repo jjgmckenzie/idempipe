@@ -45,6 +45,7 @@ This approach simplifies implementation by reducing the need for complex transac
    - A slice of prerequisites (other tasks that must complete first)
    - `RetryStrategy` (Optional): A function ``func(err error, attempts int) error`` that decides whether a failed task should be retried.
    - Returning ``nil`` indicates retry should proceed; any non-nil error stops retries and is surfaced
+   - `ShouldSkip` (Optional): A function `func() bool`. If provided and returns `true`, the task's function will not be executed. The task is logged as skipped and considered successfully completed for prerequisite checking by dependent tasks.
 
    `NewTask` returns the Task pointer and an error.
 
