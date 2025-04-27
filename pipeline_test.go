@@ -368,13 +368,13 @@ func TestPipeline_Run_ConcurrencyLimit(t *testing.T) {
 		}
 	}
 
-	if max := maxConcurrent.Load(); max > int32(concurrencyLimit) {
-		t.Errorf("Exceeded concurrency limit: expected max %d, got %d", concurrencyLimit, max)
-	} else if max == 0 && taskCount > 0 {
+	if maxConcurrentRun := maxConcurrent.Load(); maxConcurrentRun > int32(concurrencyLimit) {
+		t.Errorf("Exceeded concurrency limit: expected max %d, got %d", concurrencyLimit, maxConcurrentRun)
+	} else if maxConcurrentRun == 0 {
 		t.Error("Max concurrent tasks was 0, indicates tasks may not have run correctly")
-	} else if max < int32(concurrencyLimit) && taskCount >= concurrencyLimit {
+	} else if maxConcurrentRun < int32(concurrencyLimit) {
 		// This might be flaky if tasks finish too quickly, but generally expected
-		t.Logf("Warning: Max concurrent tasks (%d) was less than limit (%d), potentially due to fast execution", max, concurrencyLimit)
+		t.Logf("Warning: Max concurrent tasks (%d) was less than limit (%d), potentially due to fast execution", maxConcurrentRun, concurrencyLimit)
 	}
 }
 
@@ -1371,7 +1371,6 @@ func TestPipeline_Run_CancelDuringConcurrencyWait(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		// If neither started, something is wrong (e.g., Task A failed/stuck)
 		t.Fatal("Timed out waiting for Task B or C to start")
-		cancel() // Clean up context
 	}
 
 	wg.Wait() // Wait for pipeline run to finish
