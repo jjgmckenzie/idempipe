@@ -219,9 +219,13 @@ func (p *Pipeline) processPipelineResults(
 	case <-waitDone:
 		taskErrorsMu.Lock()
 		actualErrors := make(map[*Task]error)
+		var firstError error // Keep track of the first actual error
 		for task, err := range taskErrors {
 			if err != nil && !errors.Is(err, ErrTaskSkipped) {
 				actualErrors[task] = err
+				if firstError == nil { // Grab the first error encountered
+					firstError = err
+				}
 			}
 		}
 		taskErrorsMu.Unlock()
@@ -232,7 +236,8 @@ func (p *Pipeline) processPipelineResults(
 				p.log("  - Task %s: %v", task, err)
 			}
 
-			return fmt.Errorf("pipeline %q failed with %d error(s): %v", p.name, len(actualErrors), actualErrors)
+			// Wrap the first encountered error so errors.Is works
+			return fmt.Errorf("pipeline %q failed with %d error(s), first error: %w", p.name, len(actualErrors), firstError)
 		}
 
 		p.log("All tasks completed successfully.")
@@ -304,7 +309,6 @@ func (p *Pipeline) executeTask(
 	defer wg.Done()
 	defer close(doneChans[task])
 
-	// Check skip condition first
 	if task.isComplete != nil && task.isComplete() {
 		p.log("%s: Skipping due to skip condition.", task)
 		taskErrorsMu.Lock()
@@ -313,9 +317,12 @@ func (p *Pipeline) executeTask(
 		return
 	}
 
-	prerequisiteSkipError := p.waitForPrerequisites(runCtx, task, doneChans, taskErrorsMu, taskErrors)
-	if prerequisiteSkipError != nil {
-		p.recordSkipError(task, prerequisiteSkipError, taskErrorsMu, taskErrors)
+	prereqErr := p.waitForPrerequisites(runCtx, task, doneChans, taskErrorsMu, taskErrors)
+	if prereqErr != nil {
+		p.recordTaskResult(task, prereqErr, taskErrorsMu, taskErrors)
+		p.recordSkipError(task, fmt.Errorf("task skipped due to prerequisite failure: %w", prereqErr), taskErrorsMu, taskErrors)
+		p.log("Task(%s): Skipping: %v", task.name, prereqErr)
+		doneChans[task] <- ErrTaskSkipped
 		return
 	}
 
