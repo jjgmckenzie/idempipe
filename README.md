@@ -103,20 +103,16 @@ import (
 
 func main() {
 	// Define Tasks using NewTask constructor
-	taskA, errA := idempipe.NewTask(idempipe.TaskOptions{Name: "A", Function: func(ctx context.Context) error {
+	taskA := idempipe.NewTask(idempipe.TaskOptions{Name: "A", Function: func(ctx context.Context) error {
 		fmt.Println("[EXAMPLE] Executing Task A...")
 		time.Sleep(100 * time.Millisecond)
 		fmt.Println("[EXAMPLE] Task A Completed.")
 		return nil
 	}})
-	if errA != nil {
-		fmt.Printf("[EXAMPLE] Error creating task A: %v\n", errA)
-		return
-	}
 
 	// Task B with a simple retry strategy
 	var taskBFailedOnce bool // Flag to make Task B fail only the first time
-	taskB, errB := idempipe.NewTask(idempipe.TaskOptions{
+	taskB := idempipe.NewTask(idempipe.TaskOptions{
 		Name:         "B",
 		Prerequisites: []*idempipe.Task{taskA},
 		Function: func(ctx context.Context) error {
@@ -141,32 +137,20 @@ func main() {
 			return err // Signal that retry should stop
 		},
 	})
-	if errB != nil {
-		fmt.Printf("[EXAMPLE] Error creating task B: %v\n", errB)
-		return
-	}
 
-	taskC, errC := idempipe.NewTask(idempipe.TaskOptions{Name: "C", Prerequisites: []*idempipe.Task{taskA}, Function: func(ctx context.Context) error {
+	taskC := idempipe.NewTask(idempipe.TaskOptions{Name: "C", Prerequisites: []*idempipe.Task{taskA}, Function: func(ctx context.Context) error {
 		fmt.Println("[EXAMPLE] Executing Task C...")
 		time.Sleep(150 * time.Millisecond)
 		fmt.Println("[EXAMPLE] Task C Completed.")
 		return nil
 	}})
-	if errC != nil {
-		fmt.Printf("[EXAMPLE] Error creating task C: %v\n", errC)
-		return
-	}
 
-	taskD, errD := idempipe.NewTask(idempipe.TaskOptions{Name: "D", Prerequisites: []*idempipe.Task{taskB, taskC}, Function: func(ctx context.Context) error {
+	taskD := idempipe.NewTask(idempipe.TaskOptions{Name: "D", Prerequisites: []*idempipe.Task{taskB, taskC}, Function: func(ctx context.Context) error {
 		fmt.Println("[EXAMPLE] Executing Task D...")
 		time.Sleep(80 * time.Millisecond)
 		fmt.Println("[EXAMPLE] Task D Completed.")
 		return nil
 	}})
-	if errD != nil {
-		fmt.Printf("[EXAMPLE] Error creating task D: %v\n", errD)
-		return
-	}
 
 	// Create Pipeline
 	pipeline, err := idempipe.NewPipeline(idempipe.Options{

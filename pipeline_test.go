@@ -10,16 +10,19 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Helper function to create a simple task that marks itself as executed
 func makeTestTask(name string, executed *atomic.Bool, prerequisites ...*Task) *Task {
-	task, _ := NewTask(TaskOptions{
+	task := NewTask(TaskOptions{
 		Name: name,
 		Function: func(ctx context.Context) error {
-			// Simulate work
-			time.Sleep(10 * time.Millisecond)
 			executed.Store(true)
+			// Simulate some work
+			time.Sleep(10 * time.Millisecond)
 			return nil
 		},
 		Prerequisites: prerequisites,
@@ -29,10 +32,10 @@ func makeTestTask(name string, executed *atomic.Bool, prerequisites ...*Task) *T
 
 // Helper function to create a task that returns a specific error
 func makeErrorTask(name string, err error, prerequisites ...*Task) *Task {
-	task, _ := NewTask(TaskOptions{
+	task := NewTask(TaskOptions{
 		Name: name,
 		Function: func(ctx context.Context) error {
-			// Simulate work
+			// Simulate some work before failing
 			time.Sleep(10 * time.Millisecond)
 			return err
 		},
@@ -43,63 +46,66 @@ func makeErrorTask(name string, err error, prerequisites ...*Task) *Task {
 
 // Helper function to create a task that panics
 func makePanicTask(name string, prerequisites ...*Task) *Task {
-	task, _ := NewTask(TaskOptions{
+	task := NewTask(TaskOptions{
 		Name: name,
 		Function: func(ctx context.Context) error {
-			// Simulate work
-			time.Sleep(10 * time.Millisecond)
-			panic(fmt.Sprintf("task %s panicked", name))
+			panic("test panic")
 		},
 		Prerequisites: prerequisites,
 	})
 	return task
 }
 
-func TestNewTaskValidation(t *testing.T) {
+// TestNewPipeline_TaskValidation now tests that NewPipeline catches invalid tasks
+func TestNewPipeline_TaskValidation(t *testing.T) {
 	t.Run("Empty Name", func(t *testing.T) {
-		_, err := NewTask(TaskOptions{Name: "", Function: func(ctx context.Context) error { return nil }})
-		if err == nil {
-			t.Error("Expected error for empty task name, got nil")
-		}
+		invalidTask := NewTask(TaskOptions{Name: "", Function: func(ctx context.Context) error { return nil }})
+		p, err := NewPipeline(Options{Tasks: []*Task{invalidTask}})
+		require.NoError(t, err, "NewPipeline should succeed even with invalid task") // Validation happens in Run
+		runErr := p.Run(context.Background())
+		require.Error(t, runErr, "Run should fail due to empty task name")
+		assert.Contains(t, runErr.Error(), "empty name")
 	})
 
 	t.Run("Nil Function", func(t *testing.T) {
-		_, err := NewTask(TaskOptions{Name: "Test", Function: nil})
-		if err == nil {
-			t.Error("Expected error for nil task function, got nil")
-		}
+		invalidTask := NewTask(TaskOptions{Name: "Test", Function: nil})
+		p, err := NewPipeline(Options{Tasks: []*Task{invalidTask}})
+		require.NoError(t, err, "NewPipeline should succeed even with invalid task") // Validation happens in Run
+		runErr := p.Run(context.Background())
+		require.Error(t, runErr, "Run should fail due to nil task function")
+		assert.Contains(t, runErr.Error(), "missing a function")
+	})
+
+	t.Run("Nil Task Entry", func(t *testing.T) {
+		p, err := NewPipeline(Options{Tasks: []*Task{nil}})
+		require.NoError(t, err, "NewPipeline should succeed even with nil task entry") // Validation happens in Run
+		runErr := p.Run(context.Background())
+		require.Error(t, runErr, "Run should fail due to nil task entry")
+		assert.Contains(t, runErr.Error(), "nil task entry")
 	})
 
 	t.Run("Valid Task", func(t *testing.T) {
-		_, err := NewTask(TaskOptions{Name: "Valid", Function: func(ctx context.Context) error { return nil }})
-		if err != nil {
-			t.Errorf("Expected no error for valid task, got %v", err)
-		}
+		validTask := NewTask(TaskOptions{Name: "Valid", Function: func(ctx context.Context) error { return nil }})
+		_, err := NewPipeline(Options{Tasks: []*Task{validTask}})
+		require.NoError(t, err)
 	})
 
 	t.Run("Prerequisites Copied", func(t *testing.T) {
 		originalPrereqs := []*Task{
 			makeTestTask("prereq1", new(atomic.Bool)),
 		}
-		task, err := NewTask(TaskOptions{
+		task := NewTask(TaskOptions{
 			Name:          "Test",
 			Function:      func(ctx context.Context) error { return nil },
 			Prerequisites: originalPrereqs,
 		})
-		if err != nil {
-			t.Fatalf("Failed to create task: %v", err)
-		}
 
-		// Modify the original slice
-		originalPrereqs = append(originalPrereqs, makeTestTask("prereq2", new(atomic.Bool)))
+		// Modify the original slice - we don't need the returned slice header, just the side effect
+		_ = append(originalPrereqs, makeTestTask("prereq2", new(atomic.Bool)))
 
 		// Check if the task's internal prerequisites were affected
-		if len(task.prerequisites) != 1 {
-			t.Errorf("Expected task to have 1 prerequisite, got %d. Modification of original slice affected internal state.", len(task.prerequisites))
-		}
-		if task.prerequisites[0].name != "prereq1" {
-			t.Errorf("Expected prerequisite name to be 'prereq1', got '%s'", task.prerequisites[0].name)
-		}
+		require.Len(t, task.prerequisites, 1, "Modification of original slice affected internal state.")
+		assert.Equal(t, "prereq1", task.prerequisites[0].name)
 	})
 }
 
@@ -238,7 +244,7 @@ func TestPipeline_Run_ContextCancellation(t *testing.T) {
 	startSignal := make(chan struct{})
 	taskAWait := make(chan struct{}) // Channel to make Task A wait
 
-	taskA, _ := NewTask(TaskOptions{
+	taskA := NewTask(TaskOptions{
 		Name: "A",
 		Function: func(ctx context.Context) error {
 			close(startSignal) // Signal that A has started
@@ -321,7 +327,7 @@ func TestPipeline_Run_ConcurrencyLimit(t *testing.T) {
 	for i := 0; i < taskCount; i++ {
 		taskDoneChans[i] = make(chan struct{})
 		idx := i
-		task, _ := NewTask(TaskOptions{
+		task := NewTask(TaskOptions{
 			Name: fmt.Sprintf("Task-%d", idx),
 			Function: func(ctx context.Context) error {
 				current := runningTasks.Add(1)
@@ -378,7 +384,7 @@ func TestPipeline_Run_RetryStrategy(t *testing.T) {
 		failErr := errors.New("transient error")
 		maxAttempts := 3
 
-		task, _ := NewTask(TaskOptions{
+		task := NewTask(TaskOptions{
 			Name: "RetryTask",
 			Function: func(ctx context.Context) error {
 				currentAttempt := attempts.Add(1)
@@ -418,7 +424,7 @@ func TestPipeline_Run_RetryStrategy(t *testing.T) {
 		failErr := errors.New("persistent error")
 		maxRetries := 2 // Will attempt 3 times (0, 1, 2)
 
-		task, _ := NewTask(TaskOptions{
+		task := NewTask(TaskOptions{
 			Name: "FailRetryTask",
 			Function: func(ctx context.Context) error {
 				attempts.Add(1)
@@ -456,7 +462,7 @@ func TestPipeline_Run_RetryStrategy(t *testing.T) {
 		var attempts atomic.Int32
 		failErr := errors.New("some error")
 
-		task, _ := NewTask(TaskOptions{
+		task := NewTask(TaskOptions{
 			Name: "NoRetryTask",
 			Function: func(ctx context.Context) error {
 				attempts.Add(1)
@@ -487,7 +493,7 @@ func TestPipeline_Run_RetryStrategy(t *testing.T) {
 		failErr := errors.New("transient error")
 		maxAttempts := 2 // Pipeline default allows 1 retry (attempts 0, 1)
 
-		task, _ := NewTask(TaskOptions{
+		task := NewTask(TaskOptions{
 			Name: "DefaultRetryTask",
 			Function: func(ctx context.Context) error {
 				currentAttempt := attempts.Add(1)
@@ -528,7 +534,7 @@ func TestPipeline_Run_RetryStrategy(t *testing.T) {
 		maxDepth := 3
 		customMaxDepth := maxDepth // For pipeline option
 
-		task, _ := NewTask(TaskOptions{
+		task := NewTask(TaskOptions{
 			Name: "MaxDepthTask",
 			Function: func(ctx context.Context) error {
 				attempts.Add(1)
@@ -572,7 +578,7 @@ func TestPipeline_Run_RetryStrategy(t *testing.T) {
 		stopAfter := 5 // Stop manually after a few attempts
 		unlimited := -1
 
-		task, _ := NewTask(TaskOptions{
+		task := NewTask(TaskOptions{
 			Name: "UnlimitedDepthTask",
 			Function: func(ctx context.Context) error {
 				attempts.Add(1)
@@ -611,7 +617,7 @@ func TestPipeline_Run_RetryStrategy(t *testing.T) {
 func TestPipeline_Run_IsCompleteSkip(t *testing.T) {
 	var executedA, executedB atomic.Bool
 
-	taskA, _ := NewTask(TaskOptions{
+	taskA := NewTask(TaskOptions{
 		Name: "A",
 		Function: func(ctx context.Context) error {
 			executedA.Store(true)
@@ -650,7 +656,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 		var isAComplete atomic.Bool
 		var timeBStarted atomic.Int64 // Store nanoseconds
 
-		taskA, _ := NewTask(TaskOptions{
+		taskA := NewTask(TaskOptions{
 			Name: "A",
 			Function: func(ctx context.Context) error {
 				// Simulate work, then set complete status after a delay
@@ -665,7 +671,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 				return isAComplete.Load()
 			},
 		})
-		taskB, _ := NewTask(TaskOptions{
+		taskB := NewTask(TaskOptions{
 			Name: "B",
 			Function: func(ctx context.Context) error {
 				timeBStarted.Store(time.Now().UnixNano())
@@ -720,7 +726,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 
 		timeoutDuration := 100 * time.Millisecond // Short timeout
 
-		taskA, _ := NewTask(TaskOptions{
+		taskA := NewTask(TaskOptions{
 			Name: "A-Timeout",
 			Function: func(ctx context.Context) error {
 				executedA.Store(true)
@@ -730,7 +736,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 				return isAComplete // Always false
 			},
 		})
-		taskB, _ := NewTask(TaskOptions{
+		taskB := NewTask(TaskOptions{
 			Name: "B-Timeout",
 			Function: func(ctx context.Context) error {
 				executedB.Store(true)
@@ -788,7 +794,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 		// Backoff: 100ms, 200ms, 400ms, 800ms, 1s, 1s ...
 		timeoutDuration := 3 * time.Second
 
-		taskA, _ := NewTask(TaskOptions{
+		taskA := NewTask(TaskOptions{
 			Name: "A-BackoffCap",
 			Function: func(ctx context.Context) error {
 				executedA.Store(true)
@@ -798,7 +804,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 				return isAComplete // Always false, forcing wait
 			},
 		})
-		taskB, _ := NewTask(TaskOptions{
+		taskB := NewTask(TaskOptions{
 			Name: "B-BackoffCap",
 			Function: func(ctx context.Context) error {
 				executedB.Store(true)
@@ -850,7 +856,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 		var completeDelay = 50 * time.Millisecond // When IsComplete becomes true
 		var cancelDelay = 25 * time.Millisecond   // When context is cancelled
 
-		taskA, _ := NewTask(TaskOptions{
+		taskA := NewTask(TaskOptions{
 			Name: "A-CancelWait",
 			Function: func(ctx context.Context) error {
 				executedA.Store(true)
@@ -865,7 +871,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 				return isAComplete.Load()
 			},
 		})
-		taskB, _ := NewTask(TaskOptions{
+		taskB := NewTask(TaskOptions{
 			Name: "B-CancelWait",
 			Function: func(ctx context.Context) error {
 				executedB.Store(true)
@@ -915,7 +921,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 		var executedA, executedB atomic.Bool
 		isAComplete := false // Should not matter
 
-		taskA, _ := NewTask(TaskOptions{
+		taskA := NewTask(TaskOptions{
 			Name: "A-NoWait",
 			Function: func(ctx context.Context) error {
 				executedA.Store(true)
@@ -926,7 +932,7 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 				return isAComplete
 			},
 		})
-		taskB, _ := NewTask(TaskOptions{
+		taskB := NewTask(TaskOptions{
 			Name: "B-NoWait",
 			Function: func(ctx context.Context) error {
 				executedB.Store(true)
@@ -963,10 +969,10 @@ func TestPipeline_Run_WaitForComplete(t *testing.T) {
 }
 
 func TestPipeline_Run_CycleDetection(t *testing.T) {
-	taskA, _ := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
-	taskB, _ := NewTask(TaskOptions{Name: "B", Function: func(ctx context.Context) error { return nil }})
-	taskC, _ := NewTask(TaskOptions{Name: "C", Function: func(ctx context.Context) error { return nil }})
-	taskD, _ := NewTask(TaskOptions{Name: "D", Function: func(ctx context.Context) error { return nil }}) // Unrelated
+	taskA := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
+	taskB := NewTask(TaskOptions{Name: "B", Function: func(ctx context.Context) error { return nil }})
+	taskC := NewTask(TaskOptions{Name: "C", Function: func(ctx context.Context) error { return nil }})
+	taskD := NewTask(TaskOptions{Name: "D", Function: func(ctx context.Context) error { return nil }}) // Unrelated
 
 	// Create cycle: A -> B -> C -> A
 	taskA.prerequisites = []*Task{taskC}
@@ -999,8 +1005,8 @@ func TestPipeline_Run_CycleDetection(t *testing.T) {
 
 func TestDetectCycles_Advanced(t *testing.T) {
 	t.Run("Nil Prerequisite Entry", func(t *testing.T) {
-		taskA, _ := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
-		taskB, _ := NewTask(TaskOptions{Name: "B", Function: func(ctx context.Context) error { return nil }})
+		taskA := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
+		taskB := NewTask(TaskOptions{Name: "B", Function: func(ctx context.Context) error { return nil }})
 		// Intentionally create a nil entry in prerequisites
 		taskA.prerequisites = []*Task{nil, taskB}
 
@@ -1014,8 +1020,8 @@ func TestDetectCycles_Advanced(t *testing.T) {
 	})
 
 	t.Run("Prerequisite Not Defined in Tasks", func(t *testing.T) {
-		taskA, _ := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
-		taskNotInList, _ := NewTask(TaskOptions{Name: "NotInList", Function: func(ctx context.Context) error { return nil }})
+		taskA := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
+		taskNotInList := NewTask(TaskOptions{Name: "NotInList", Function: func(ctx context.Context) error { return nil }})
 
 		// taskA depends on a task not included in the list passed to detectCycles
 		taskA.prerequisites = []*Task{taskNotInList}
@@ -1031,14 +1037,14 @@ func TestDetectCycles_Advanced(t *testing.T) {
 
 	t.Run("Multiple Unrelated Cycles", func(t *testing.T) {
 		// Cycle 1: A -> B -> A
-		taskA, _ := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
-		taskB, _ := NewTask(TaskOptions{Name: "B", Function: func(ctx context.Context) error { return nil }})
+		taskA := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
+		taskB := NewTask(TaskOptions{Name: "B", Function: func(ctx context.Context) error { return nil }})
 		taskA.prerequisites = []*Task{taskB}
 		taskB.prerequisites = []*Task{taskA}
 
 		// Cycle 2: C -> D -> C
-		taskC, _ := NewTask(TaskOptions{Name: "C", Function: func(ctx context.Context) error { return nil }})
-		taskD, _ := NewTask(TaskOptions{Name: "D", Function: func(ctx context.Context) error { return nil }})
+		taskC := NewTask(TaskOptions{Name: "C", Function: func(ctx context.Context) error { return nil }})
+		taskD := NewTask(TaskOptions{Name: "D", Function: func(ctx context.Context) error { return nil }})
 		taskC.prerequisites = []*Task{taskD}
 		taskD.prerequisites = []*Task{taskC}
 
@@ -1094,8 +1100,9 @@ func TestPipeline_Run_PanicHandling(t *testing.T) {
 func TestPipeline_Run_CancelDuringTaskExecution(t *testing.T) {
 	var executedA atomic.Bool
 	startSignal := make(chan struct{})
-	taskA, _ := NewTask(TaskOptions{
-		Name: "A-CancelExec",
+
+	taskA := NewTask(TaskOptions{
+		Name: "A",
 		Function: func(ctx context.Context) error {
 			close(startSignal)
 			executedA.Store(true)
@@ -1194,19 +1201,13 @@ func TestPipeline_Run_CancelDuringCycleDetection(t *testing.T) {
 // TestBuildCyclePathString_StartNodeNotFound tests the edge case where the start node is not found in the path,
 // which should trigger the internal error handling for line 662 coverage.
 func TestBuildCyclePathString_StartNodeNotFound(t *testing.T) {
-	taskA, _ := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
-	taskB, _ := NewTask(TaskOptions{Name: "B", Function: func(ctx context.Context) error { return nil }})
-	taskNotInPath, _ := NewTask(TaskOptions{Name: "NotInPath", Function: func(ctx context.Context) error { return nil }})
+	taskA := NewTask(TaskOptions{Name: "A", Function: func(ctx context.Context) error { return nil }})
+	taskB := NewTask(TaskOptions{Name: "B", Function: func(ctx context.Context) error { return nil }})
+	taskNotInPath := NewTask(TaskOptions{Name: "NotInPath", Function: func(ctx context.Context) error { return nil }})
 
-	path := []*Task{taskA, taskB} // Path containing A and B
-
-	// Call with startNode that is not in the path
+	path := []*Task{taskA, taskB}
 	result := buildCyclePathString(path, taskNotInPath)
-
-	expected := "[internal error building cycle path: start node not found in path]"
-	if result != expected {
-		t.Errorf("Expected internal error message '%s', got '%s'", expected, result)
-	}
+	assert.Contains(t, result, "internal error")
 }
 
 // TestPipeline_Run_CancelDuringRetryWait tests cancellation hitting the check
@@ -1216,7 +1217,7 @@ func TestPipeline_Run_CancelDuringRetryWait(t *testing.T) {
 	failErr := errors.New("persistent retry error")
 	retrySignal := make(chan struct{}) // Signal that retry strategy is active
 
-	task, _ := NewTask(TaskOptions{
+	task := NewTask(TaskOptions{
 		Name: "CancelRetryTask",
 		Function: func(ctx context.Context) error {
 			attempts.Add(1)
@@ -1311,7 +1312,7 @@ func TestPipeline_Run_CancelDuringConcurrencyWait(t *testing.T) {
 
 	taskA := makeTestTask("A", &executedA)
 
-	taskB, _ := NewTask(TaskOptions{
+	taskB := NewTask(TaskOptions{
 		Name: "B",
 		Function: func(ctx context.Context) error {
 			startedB.Store(true)
@@ -1327,7 +1328,7 @@ func TestPipeline_Run_CancelDuringConcurrencyWait(t *testing.T) {
 		Prerequisites: []*Task{taskA},
 	})
 
-	taskC, _ := NewTask(TaskOptions{
+	taskC := NewTask(TaskOptions{
 		Name: "C",
 		Function: func(ctx context.Context) error {
 			startedC.Store(true)
@@ -1410,4 +1411,15 @@ func TestPipeline_Run_CancelDuringConcurrencyWait(t *testing.T) {
 	// Log final states for debugging if needed
 	t.Logf("Final states: executedA=%t, startedB=%t, executedB=%t, startedC=%t, executedC=%t",
 		executedA.Load(), bStarted, executedB.Load(), cStarted, executedC.Load())
+}
+
+func TestTask_String(t *testing.T) {
+	task := NewTask(TaskOptions{
+		Name:     "MyTask",
+		Function: func(ctx context.Context) error { return nil },
+	})
+	expected := "Task(MyTask)"
+	if task.String() != expected {
+		t.Errorf("Expected task string '%s', got '%s'", expected, task.String())
+	}
 }

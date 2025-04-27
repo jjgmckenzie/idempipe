@@ -45,14 +45,7 @@ type TaskOptions struct {
 
 // NewTask creates and validates a new Task.
 // It copies the provided prerequisites to prevent external modification.
-func NewTask(opts TaskOptions) (*Task, error) {
-	if opts.Name == "" {
-		return nil, errors.New("task name cannot be empty")
-	}
-	if opts.Function == nil {
-		return nil, errors.New("task function cannot be nil")
-	}
-
+func NewTask(opts TaskOptions) *Task {
 	// Create a copy of the prerequisites slice to prevent external modification
 	prerequisitesCopy := make([]*Task, len(opts.Prerequisites))
 	if opts.Prerequisites != nil {
@@ -65,7 +58,7 @@ func NewTask(opts TaskOptions) (*Task, error) {
 		function:      opts.Function,
 		retryStrategy: opts.RetryStrategy,
 		isComplete:    opts.IsComplete, // Assign the skip condition
-	}, nil
+	}
 }
 
 // String provides a simple string representation for the task, primarily for logging/debugging.
@@ -124,6 +117,7 @@ func NewPipeline(opts Options) (*Pipeline, error) {
 	if opts.Tasks == nil {
 		return nil, fmt.Errorf("pipeline options must include all of the pipeline's tasks")
 	}
+
 	if opts.Logger == nil {
 		opts.Logger = func(format string) {
 			fmt.Print(format)
@@ -528,9 +522,21 @@ const (
 // detectCycles checks for circular prerequisites among the tasks using Depth First Search.
 // It returns an error describing the cycle if one is found, otherwise nil.
 // It also checks if all declared prerequisites exist within the provided tasks list.
+// It also checks if all tasks have a name and a function.
 func detectCycles(tasks []*Task) error {
 	state := make(map[*Task]visitState)
 	for _, task := range tasks {
+		if task == nil {
+			return errors.New("pipeline contains a nil task entry")
+		}
+		if task.name == "" {
+			// Identify the task more effectively in the error message if possible.
+			// Since the name is empty, we might not have much context.
+			return errors.New("pipeline contains a task with an empty name")
+		}
+		if task.function == nil {
+			return fmt.Errorf("task %q is missing a function", task.name)
+		}
 		state[task] = unvisited
 	}
 
