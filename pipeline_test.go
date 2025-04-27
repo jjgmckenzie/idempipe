@@ -1440,8 +1440,8 @@ func TestPipeline_CancelWhileWaitingForPrerequisite(t *testing.T) {
 
 	// Wait until the log confirms Waiter is waiting for Blocker.
 	// This is the most reliable way to know it's in the target state without modifying pipeline internals.
-	expectedLog := "Task(Waiter): Waiting for prerequisite Task(Blocker)..."
-	logWaitTimeout := 3 * time.Second // Increased timeout slightly
+	expectedLog := "Task(Waiter): Waiting for prerequisite Task(Blocker) function to finish..." // Corrected log message
+	logWaitTimeout := 3 * time.Second                                                           // Increased timeout slightly
 	logCheckInterval := 10 * time.Millisecond
 	startTime := time.Now()
 	foundLog := false
@@ -1541,11 +1541,11 @@ func TestPipeline_SkipCondition(t *testing.T) {
 
 	logOutput := logger.String()
 	t.Logf("Logs:\n%s", logOutput) // Log output for debugging
-	assert.Contains(t, logOutput, "Task(Skippable): Skipping due to skip condition.", "Skippable task should log skipping")
-	assert.NotContains(t, logOutput, "Task(Skippable): Starting...", "Skippable task should not start execution")
-	assert.NotContains(t, logOutput, "Task(Skippable): Completed", "Skippable task should not log completion")
-	assert.Contains(t, logOutput, "Task(Dependent): Waiting for prerequisite Task(Skippable)...", "Dependent task should wait for Skippable")
-	assert.Contains(t, logOutput, "Task(Dependent): Prerequisite Task(Skippable) completed successfully.", "Dependent task should see Skippable as successful")
+	assert.Contains(t, logOutput, "Task(Completed): Skipping due to skip condition.", "Skippable task should log skipping")
+	assert.NotContains(t, logOutput, "Task(Completed): Starting...", "Skippable task should not start execution")
+	assert.NotContains(t, logOutput, "Task(Completed): Completed", "Skippable task should not log completion")
+	assert.Contains(t, logOutput, "Task(Dependent): Waiting for prerequisite Task(Completed)", "Dependent task should wait for Completed")
+	assert.Contains(t, logOutput, "Task(Dependent): Prerequisite Task(Completed) completed successfully.", "Dependent task should see Completed as successful")
 	assert.Contains(t, logOutput, "Task(Dependent): Completed", "Dependent task should complete")
 	assert.Contains(t, logOutput, "All tasks completed successfully")
 
@@ -1571,9 +1571,9 @@ func TestPipeline_SkipCondition(t *testing.T) {
 
 	logOutput = logger.String()
 	t.Logf("Logs (Not Skipped):\n%s", logOutput)
-	assert.NotContains(t, logOutput, "Task(Skippable): Skipping due to skip condition.")
-	assert.Contains(t, logOutput, "Task(Skippable): Starting...")
-	assert.Contains(t, logOutput, "Task(Skippable): Completed")
+	assert.NotContains(t, logOutput, "Task(Completed): Skipping due to skip condition.")
+	assert.Contains(t, logOutput, "Task(Completed): Starting...")
+	assert.Contains(t, logOutput, "Task(Completed): Completed")
 	assert.Contains(t, logOutput, "Task(Dependent): Completed")
 	assert.Contains(t, logOutput, "All tasks completed successfully")
 }

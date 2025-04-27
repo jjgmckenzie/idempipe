@@ -13,6 +13,9 @@ import (
 // ErrTaskSkipped indicates that a task did not execute because an upstream prerequisite failed or the context was cancelled.
 var ErrTaskSkipped = errors.New("task skipped due to prerequisite failure or cancellation")
 
+// ErrWaitTimeout indicates that waiting for a prerequisite's isComplete condition timed out.
+var ErrWaitTimeout = errors.New("timed out waiting for prerequisite isComplete condition")
+
 // Task represents a single unit of work in the pipeline.
 // Its fields are unexported and should only be set via NewTask.
 type Task struct {
@@ -93,6 +96,10 @@ type Options struct {
 	// For most use cases, this should not be overridden; the retry strategy should utilize a backoff strategy, or the task function should use a polling strategy.
 	// If you wish to deliberately allow infinite retries, set this to -1.
 	MaximumRetryStrategyDepth *int
+	// WaitForCompleteDuration is an optional duration. If set and > 0, the pipeline will wait
+	// for a prerequisite's `isComplete` function to return true (after the prerequisite task function finishes)
+	// before starting a dependent task. It uses exponential backoff and times out after this duration.
+	WaitForCompleteDuration *time.Duration
 }
 
 // Pipeline manages the execution of a directed acyclic graph (DAG) of tasks.
@@ -103,6 +110,7 @@ type Pipeline struct {
 	concurrencyLimiter        chan struct{}
 	retryStrategy             func(err error, attempt int) error
 	maximumRetryStrategyDepth *int
+	waitForCompleteDuration   *time.Duration
 }
 
 // NewPipeline creates a new pipeline instance from the given options.
@@ -142,6 +150,7 @@ func NewPipeline(opts Options) (*Pipeline, error) {
 		concurrencyLimiter:        concurrencyLimiter,
 		retryStrategy:             defaultRetryStrategy,
 		maximumRetryStrategyDepth: opts.MaximumRetryStrategyDepth,
+		waitForCompleteDuration:   opts.WaitForCompleteDuration,
 	}
 	return p, nil
 }
@@ -330,6 +339,7 @@ func (p *Pipeline) executeTask(
 
 // waitForPrerequisites waits for all prerequisites of a task to complete.
 // It returns an error if any prerequisite fails or if the context is cancelled.
+// If WaitForCompleteDuration is set, it also waits for the prerequisite's isComplete check after its function finishes.
 func (p *Pipeline) waitForPrerequisites(
 	runCtx context.Context,
 	task *Task,
@@ -341,12 +351,13 @@ func (p *Pipeline) waitForPrerequisites(
 	var cancelledWhileWaiting bool
 
 	for _, prerequisite := range task.prerequisites {
-		p.log("%s: Waiting for prerequisite %s...", task, prerequisite)
+		p.log("%s: Waiting for prerequisite %s function to finish...", task, prerequisite)
 		select {
 		case <-doneChans[prerequisite]:
 			taskErrorsMu.Lock()
 			prerequisiteErr := taskErrors[prerequisite]
 			taskErrorsMu.Unlock()
+
 			if prerequisiteErr != nil {
 				if prerequisiteSkipError == nil {
 					prerequisiteSkipError = prerequisiteErr
@@ -354,6 +365,25 @@ func (p *Pipeline) waitForPrerequisites(
 				p.log("%s: Prerequisite %s did not complete successfully (%v).", task, prerequisite, prerequisiteErr)
 			} else {
 				p.log("%s: Prerequisite %s completed successfully.", task, prerequisite)
+
+				// --- Wait for isComplete condition if configured --- //
+				if p.waitForCompleteDuration != nil && *p.waitForCompleteDuration > 0 && prerequisite.isComplete != nil {
+					p.log("%s: Waiting up to %v for prerequisite %s isComplete condition...", task, *p.waitForCompleteDuration, prerequisite)
+					waitCtx, waitCancel := context.WithTimeout(runCtx, *p.waitForCompleteDuration)
+
+					waitErr := p.waitWithBackoff(waitCtx, prerequisite)
+					waitCancel() // Ensure context is always cancelled
+
+					if waitErr != nil {
+						p.log("%s: Prerequisite %s failed isComplete wait: %v", task, prerequisite, waitErr)
+						if prerequisiteSkipError == nil {
+							prerequisiteSkipError = waitErr
+						}
+					}
+				} else {
+					p.log("%s: Prerequisite %s check complete (no wait configured or needed).", task, prerequisite)
+				}
+				// --- End wait for isComplete condition --- //
 			}
 		case <-runCtx.Done():
 			p.log("%s: Cancelled by context while waiting for prerequisite %s.", task, prerequisite)
@@ -367,6 +397,37 @@ func (p *Pipeline) waitForPrerequisites(
 		}
 	}
 	return prerequisiteSkipError
+}
+
+// waitWithBackoff waits for a task's isComplete condition with exponential backoff.
+func (p *Pipeline) waitWithBackoff(waitCtx context.Context, prerequisite *Task) error {
+	baseDelay := 100 * time.Millisecond
+	maxDelay := 1 * time.Second
+	currentDelay := baseDelay
+
+	for {
+		if prerequisite.isComplete() {
+			p.log("Task %s isComplete returned true.", prerequisite)
+			return nil // Condition met
+		}
+
+		select {
+		case <-waitCtx.Done():
+			if errors.Is(waitCtx.Err(), context.DeadlineExceeded) {
+				return fmt.Errorf("%w for task %s", ErrWaitTimeout, prerequisite.name)
+			}
+			return waitCtx.Err() // Context cancelled for other reasons
+		case <-time.After(currentDelay):
+			// Continue loop after delay
+		}
+
+		// Increase delay for next iteration
+		currentDelay *= 2
+		if currentDelay > maxDelay {
+			currentDelay = maxDelay
+		}
+		p.log("Task %s isComplete returned false, waiting %v before next check...", prerequisite, currentDelay)
+	}
 }
 
 // defaultMaximumRetryDepth is the default maximum number of retries to allow for a given task, preventing infinite retries.
