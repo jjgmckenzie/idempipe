@@ -1513,14 +1513,14 @@ func TestPipeline_SkipCondition(t *testing.T) {
 	}
 
 	taskA, errA := NewTask(TaskOptions{
-		Name:          "Skippable",
+		Name:          "Completed",
 		Prerequisites: nil,
 		Function: func(ctx context.Context) error {
 			// This function should not be called
-			assert.Fail(t, "Skippable task function should not be executed")
+			assert.Fail(t, "Complete task function should not be executed")
 			return errors.New("should have been skipped")
 		},
-		ShouldSkip: shouldSkipFunc,
+		IsComplete: shouldSkipFunc,
 	})
 	require.NoError(t, errA)
 
